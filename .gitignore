@@ -1,0 +1,30 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Private uploads
+uploads/*
+!uploads/.gitkeep
+
+# Logs and editor files
+*.log
+.vscode/
+.idea/
+.DS_Store

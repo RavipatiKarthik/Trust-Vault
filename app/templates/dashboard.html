@@ -1,0 +1,31 @@
+
+{% extends "base.html" %}
+
+{% block title %}Dashboard | TrustVault{% endblock %}
+
+{% block content %}
+<h2>Welcome to TrustVault</h2>
+<p>Manage your documents, permissions, and secure sharing from one place.</p>
+
+<div class="cards">
+    <a class="card" href="/documents">
+        <h3>My Documents</h3>
+        <p>Upload and manage your documents.</p>
+    </a>
+
+    <a class="card" href="/sharing">
+        <h3>Document Sharing</h3>
+        <p>Manage access permissions and sharing requests.</p>
+    </a>
+
+    <a class="card" href="/ai/suggestions">
+        <h3>AI Suggestions</h3>
+        <p>Review suggested document permissions.</p>
+    </a>
+
+    <a class="card" href="/audit">
+        <h3>Audit Logs</h3>
+        <p>Review recorded security and access events.</p>
+    </a>
+</div>
+{% endblock %}

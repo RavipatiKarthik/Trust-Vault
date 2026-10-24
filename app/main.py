@@ -1,4 +1,4 @@
-
+﻿
 import os
 import secrets
 import uuid
@@ -17,7 +17,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 from pwdlib import PasswordHash
 
 BASE = Path(__file__).resolve().parent.parent
-UPLOADS = BASE / "uploads"
+UPLOADS = Path(os.getenv("UPLOADS_DIR", "/tmp/trustvault-uploads" if os.getenv("VERCEL") else str(BASE / "uploads")))
 UPLOADS.mkdir(parents=True, exist_ok=True)
 
 DATABASE_URL = os.getenv(
@@ -169,19 +169,19 @@ def page(title, body, user=None, csrf=""):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{escape(title)} · TrustVault</title>
+<title>{escape(title)} Â· TrustVault</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <h1>🔐 TrustVault</h1>
+  <h1>ðŸ” TrustVault</h1>
   {nav}
 </header>
 <main>
   <h2>{escape(title)}</h2>
   {body}
 </main>
-<footer>TrustVault · Secure document access</footer>
+<footer>TrustVault Â· Secure document access</footer>
 </body>
 </html>"""
     )
@@ -266,7 +266,7 @@ async def register(request: Request, db: Session = Depends(get_db)):
     ):
         return page(
             "Registration error",
-            '<p>Use 3–80 letters or numbers for the username.</p>'
+            '<p>Use 3â€“80 letters or numbers for the username.</p>'
             '<a href="/register">Try again</a>',
         )
 
@@ -461,10 +461,10 @@ def documents(request: Request, db: Session = Depends(get_db)):
     visible = [doc for doc in docs if can_read(db, user, doc)]
 
     items = "".join(
-        f'<li><strong>{escape(doc.filename)}</strong> — document #{doc.id} '
+        f'<li><strong>{escape(doc.filename)}</strong> â€” document #{doc.id} '
         f'<a href="/documents/{doc.id}/download">Download</a>'
         + (
-            f' · <a href="/sharing?document_id={doc.id}">Manage access</a>'
+            f' Â· <a href="/sharing?document_id={doc.id}">Manage access</a>'
             if doc.owner_id == user.id
             else ""
         )
@@ -645,10 +645,10 @@ def sharing(
     ).all()
 
     suggestion_html = "".join(
-        f'<li>Suggestion #{suggestion.id} — '
+        f'<li>Suggestion #{suggestion.id} â€” '
         f'document #{suggestion.document_id}, '
         f'target user #{suggestion.target_id}: '
-        f'{escape(suggestion.reason)} — '
+        f'{escape(suggestion.reason)} â€” '
         f'<strong>{escape(suggestion.status)}</strong>'
         + (
             f'<form method="post" action="/ai/suggestions/{suggestion.id}/approve" class="inline">'
@@ -700,7 +700,7 @@ def sharing(
     ).all() if own_ids else []
 
     rows = "".join(
-        f"<li>Document #{permission.document_id} → "
+        f"<li>Document #{permission.document_id} â†’ "
         f"user #{permission.user_id}: {escape(permission.access)}</li>"
         for permission in permissions
     ) or "<li>No documents are currently shared.</li>"
@@ -892,7 +892,7 @@ def audit_page(request: Request, db: Session = Depends(get_db)):
     rows = "".join(
         f"<tr><td>{event.id}</td>"
         f"<td>{escape(event.action)}</td>"
-        f"<td>{event.document_id or '—'}</td>"
+        f"<td>{event.document_id or 'â€”'}</td>"
         f"<td>{escape(event.detail)}</td>"
         f"<td>{escape(event.created_at.isoformat())}</td></tr>"
         for event in visible
@@ -925,3 +925,4 @@ def audit_page(request: Request, db: Session = Depends(get_db)):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+

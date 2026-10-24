@@ -14,28 +14,71 @@ from sqlalchemy import (
     create_engine, String, ForeignKey, DateTime, Text, select, func
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
+from sqlalchemy.pool import NullPool
 from pwdlib import PasswordHash
 
 BASE = Path(__file__).resolve().parent.parent
-UPLOADS = Path(os.getenv("UPLOADS_DIR", "/tmp/trustvault-uploads" if os.getenv("VERCEL") else str(BASE / "uploads")))
+
+UPLOADS = Path(
+    os.getenv(
+        "UPLOADS_DIR",
+        "/tmp/trustvault-uploads"
+        if os.getenv("VERCEL")
+        else str(BASE / "uploads"),
+    )
+)
 UPLOADS.mkdir(parents=True, exist_ok=True)
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    f"sqlite:///{(BASE / 'trustvault.db').as_posix()}"
-)
+# Database configuration:
+# PostgreSQL is used when DATABASE_URL is set.
+# SQLite is used only for local development.
+raw_database_url = os.getenv("DATABASE_URL")
 
+if raw_database_url:
+    DATABASE_URL = raw_database_url.strip()
+
+    # Neon commonly provides postgresql:// or postgres:// URLs.
+    # Explicitly select the Psycopg 3 SQLAlchemy driver.
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace(
+            "postgres://", "postgresql+psycopg://", 1
+        )
+    elif DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace(
+            "postgresql://", "postgresql+psycopg://", 1
+        )
+
+elif os.getenv("VERCEL"):
+    raise RuntimeError(
+        "DATABASE_URL is missing. Configure Neon PostgreSQL "
+        "in Vercel Environment Variables."
+    )
+
+else:
+    DATABASE_URL = f"sqlite:///{(BASE / 'trustvault.db').as_posix()}"
+
+# Use a stable secret in production.
 SECRET_KEY = os.getenv("SESSION_SECRET")
-if not SECRET_KEY:
-    SECRET_KEY = secrets.token_urlsafe(32)
-    print("WARNING: Temporary session secret. Set SESSION_SECRET before deployment.")
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-    if DATABASE_URL.startswith("sqlite")
-    else {},
-)
+if not SECRET_KEY:
+    if os.getenv("VERCEL"):
+        raise RuntimeError(
+            "SESSION_SECRET is missing. Set it in Vercel "
+            "Environment Variables before deploying."
+        )
+
+    SECRET_KEY = secrets.token_urlsafe(32)
+    print("Using a temporary local development session secret.")
+
+engine_options = {"pool_pre_ping": True}
+
+if DATABASE_URL.startswith("sqlite"):
+    engine_options["connect_args"] = {"check_same_thread": False}
+else:
+    # Avoid retaining a large connection pool in serverless functions.
+    engine_options["poolclass"] = NullPool
+
+engine = create_engine(DATABASE_URL, **engine_options)
 
 password_hash = PasswordHash.recommended()
 
@@ -48,7 +91,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    username: Mapped[str] = mapped_column(
+        String(80), unique=True, index=True
+    )
     password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="viewer")
 
@@ -57,9 +102,13 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), index=True
+    )
     filename: Mapped[str] = mapped_column(String(255))
-    stored_name: Mapped[str] = mapped_column(String(80), unique=True)
+    stored_name: Mapped[str] = mapped_column(
+        String(80), unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
@@ -69,20 +118,28 @@ class Permission(Base):
     __tablename__ = "permissions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id")
+    )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    access: Mapped[str] = mapped_column(String(20), default="viewer")
+    access: Mapped[str] = mapped_column(
+        String(20), default="viewer"
+    )
 
 
 class Suggestion(Base):
     __tablename__ = "suggestions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id")
+    )
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     target_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     reason: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
@@ -105,6 +162,8 @@ class Audit(Base):
     )
 
 
+# Create missing tables in the configured database.
+# This does not migrate existing table schemas.
 Base.metadata.create_all(engine)
 
 app = FastAPI(title="TrustVault", version="1.1.0")
@@ -130,8 +189,10 @@ def get_db():
 
 def current_user(request: Request, db: Session):
     user_id = request.session.get("user_id")
+
     if not user_id:
         return None
+
     return db.get(User, user_id)
 
 
@@ -169,19 +230,19 @@ def page(title, body, user=None, csrf=""):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{escape(title)} Â· TrustVault</title>
+<title>{escape(title)} · TrustVault</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <h1>ðŸ” TrustVault</h1>
+  <h1>🔐 TrustVault</h1>
   {nav}
 </header>
 <main>
   <h2>{escape(title)}</h2>
   {body}
 </main>
-<footer>TrustVault Â· Secure document access</footer>
+<footer>TrustVault · Secure document access</footer>
 </body>
 </html>"""
     )
@@ -190,6 +251,7 @@ def page(title, body, user=None, csrf=""):
 def csrf_token(request):
     if "csrf" not in request.session:
         request.session["csrf"] = secrets.token_urlsafe(32)
+
     return request.session["csrf"]
 
 
@@ -201,6 +263,7 @@ async def read_form(request: Request):
         str(form.get("csrf", "")), expected
     ):
         from fastapi import HTTPException
+
         raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
     return form
@@ -214,13 +277,16 @@ def can_read(db, user, doc):
     if user.id == doc.owner_id:
         return True
 
-    return db.scalar(
-        select(Permission.id).where(
-            Permission.document_id == doc.id,
-            Permission.user_id == user.id,
-            Permission.access == "viewer",
+    return (
+        db.scalar(
+            select(Permission.id).where(
+                Permission.document_id == doc.id,
+                Permission.user_id == user.id,
+                Permission.access == "viewer",
+            )
         )
-    ) is not None
+        is not None
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -266,7 +332,7 @@ async def register(request: Request, db: Session = Depends(get_db)):
     ):
         return page(
             "Registration error",
-            '<p>Use 3â€“80 letters or numbers for the username.</p>'
+            '<p>Use 3-80 letters or numbers for the username.</p>'
             '<a href="/register">Try again</a>',
         )
 
@@ -280,7 +346,8 @@ async def register(request: Request, db: Session = Depends(get_db)):
     if db.scalar(select(User.id).where(User.username == username)):
         return page(
             "Registration error",
-            '<p>Username already exists.</p><a href="/register">Try again</a>',
+            '<p>Username already exists.</p>'
+            '<a href="/register">Try again</a>',
         )
 
     user = User(
@@ -289,10 +356,14 @@ async def register(request: Request, db: Session = Depends(get_db)):
         role="viewer",
     )
     db.add(user)
-    db.flush()
 
-    audit(db, user.id, "account.registered", detail=f"username={username}")
-    db.commit()
+    try:
+        db.flush()
+        audit(db, user.id, "account.registered", detail=f"username={username}")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return RedirectResponse("/login", status_code=303)
 
@@ -328,7 +399,8 @@ async def login(request: Request, db: Session = Depends(get_db)):
     if not user or not password_hash.verify(password, user.password):
         return page(
             "Login failed",
-            '<p>Invalid username or password.</p><a href="/login">Try again</a>',
+            '<p>Invalid username or password.</p>'
+            '<a href="/login">Try again</a>',
         )
 
     request.session.clear()
@@ -351,6 +423,7 @@ async def logout(request: Request, db: Session = Depends(get_db)):
         db.commit()
 
     request.session.clear()
+
     return RedirectResponse("/login", status_code=303)
 
 
@@ -366,7 +439,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     ) or 0
 
     shared_count = db.scalar(
-        select(func.count(Permission.id)).where(Permission.user_id == user.id)
+        select(func.count(Permission.id)).where(
+            Permission.user_id == user.id
+        )
     ) or 0
 
     pending_count = db.scalar(
@@ -461,10 +536,10 @@ def documents(request: Request, db: Session = Depends(get_db)):
     visible = [doc for doc in docs if can_read(db, user, doc)]
 
     items = "".join(
-        f'<li><strong>{escape(doc.filename)}</strong> â€” document #{doc.id} '
+        f'<li><strong>{escape(doc.filename)}</strong> — document #{doc.id} '
         f'<a href="/documents/{doc.id}/download">Download</a>'
         + (
-            f' Â· <a href="/sharing?document_id={doc.id}">Manage access</a>'
+            f' · <a href="/sharing?document_id={doc.id}">Manage access</a>'
             if doc.owner_id == user.id
             else ""
         )
@@ -515,6 +590,7 @@ async def upload(
     await read_form(request)
 
     user = login_required(request, db)
+
     if not user:
         return RedirectResponse("/login", status_code=303)
 
@@ -552,6 +628,7 @@ async def upload(
                 f"filename={safe_name}",
             )
             db.commit()
+
         except Exception:
             db.rollback()
             path.unlink(missing_ok=True)
@@ -587,13 +664,18 @@ def download(
         db.commit()
 
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Document not found")
 
     path = UPLOADS / doc.stored_name
 
     if not path.is_file():
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Document file unavailable")
+
+        raise HTTPException(
+            status_code=404,
+            detail="Document file unavailable",
+        )
 
     audit(db, user.id, "document.downloaded", doc.id)
     db.commit()
@@ -645,10 +727,10 @@ def sharing(
     ).all()
 
     suggestion_html = "".join(
-        f'<li>Suggestion #{suggestion.id} â€” '
+        f'<li>Suggestion #{suggestion.id} — '
         f'document #{suggestion.document_id}, '
         f'target user #{suggestion.target_id}: '
-        f'{escape(suggestion.reason)} â€” '
+        f'{escape(suggestion.reason)} — '
         f'<strong>{escape(suggestion.status)}</strong>'
         + (
             f'<form method="post" action="/ai/suggestions/{suggestion.id}/approve" class="inline">'
@@ -695,12 +777,18 @@ def sharing(
 
     own_ids = {doc.id for doc in docs}
 
-    permissions = db.scalars(
-        select(Permission).where(Permission.document_id.in_(own_ids))
-    ).all() if own_ids else []
+    permissions = (
+        db.scalars(
+            select(Permission).where(
+                Permission.document_id.in_(own_ids)
+            )
+        ).all()
+        if own_ids
+        else []
+    )
 
     rows = "".join(
-        f"<li>Document #{permission.document_id} â†’ "
+        f"<li>Document #{permission.document_id} → "
         f"user #{permission.user_id}: {escape(permission.access)}</li>"
         for permission in permissions
     ) or "<li>No documents are currently shared.</li>"
@@ -718,6 +806,7 @@ async def suggest(request: Request, db: Session = Depends(get_db)):
     form = await read_form(request)
 
     user = login_required(request, db)
+
     if not user:
         return RedirectResponse("/login", status_code=303)
 
@@ -726,7 +815,11 @@ async def suggest(request: Request, db: Session = Depends(get_db)):
         target_id = int(form["target_id"])
     except (ValueError, KeyError, TypeError):
         from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Invalid document or user")
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid document or user",
+        )
 
     doc = db.get(Document, doc_id)
     target = db.get(User, target_id)
@@ -738,6 +831,7 @@ async def suggest(request: Request, db: Session = Depends(get_db)):
         or target.id == user.id
     ):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=403,
             detail="Only the document owner can request a suggestion",
@@ -763,10 +857,12 @@ async def suggest(request: Request, db: Session = Depends(get_db)):
         user.id,
         "ai.permission_suggested",
         doc.id,
-        f"suggestion_id={suggestion.id}; target_id={target.id}; no access granted",
+        f"suggestion_id={suggestion.id}; target_id={target.id}; "
+        "no access granted",
     )
 
     db.commit()
+
     return RedirectResponse("/sharing", status_code=303)
 
 
@@ -780,10 +876,15 @@ def decide_suggestion(request, db, suggestion_id, decision):
 
     if not suggestion or suggestion.owner_id != user.id:
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+        raise HTTPException(
+            status_code=404,
+            detail="Suggestion not found",
+        )
 
     if suggestion.status != "pending":
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=409,
             detail="Suggestion has already been decided",
@@ -813,8 +914,10 @@ def decide_suggestion(request, db, suggestion_id, decision):
             user.id,
             "permission.approved",
             suggestion.document_id,
-            f"suggestion_id={suggestion.id}; target_id={suggestion.target_id}",
+            f"suggestion_id={suggestion.id}; "
+            f"target_id={suggestion.target_id}",
         )
+
     else:
         suggestion.status = "rejected"
 
@@ -823,10 +926,12 @@ def decide_suggestion(request, db, suggestion_id, decision):
             user.id,
             "permission.rejected",
             suggestion.document_id,
-            f"suggestion_id={suggestion.id}; target_id={suggestion.target_id}",
+            f"suggestion_id={suggestion.id}; "
+            f"target_id={suggestion.target_id}",
         )
 
     db.commit()
+
     return user
 
 
@@ -892,7 +997,7 @@ def audit_page(request: Request, db: Session = Depends(get_db)):
     rows = "".join(
         f"<tr><td>{event.id}</td>"
         f"<td>{escape(event.action)}</td>"
-        f"<td>{event.document_id or 'â€”'}</td>"
+        f"<td>{event.document_id or '—'}</td>"
         f"<td>{escape(event.detail)}</td>"
         f"<td>{escape(event.created_at.isoformat())}</td></tr>"
         for event in visible
@@ -925,4 +1030,3 @@ def audit_page(request: Request, db: Session = Depends(get_db)):
 @app.get("/health")
 def health():
     return {"status": "ok"}
-

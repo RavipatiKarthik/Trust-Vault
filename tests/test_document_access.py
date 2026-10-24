@@ -409,3 +409,38 @@ def test_non_owner_cannot_reject_suggestion():
                 )
             )
             assert permission is None
+
+def test_upload_rejects_invalid_csrf_token():
+    with TestClient(app) as client:
+        response = client.post(
+            "/upload",
+            data={"csrf": "invalid-token"},
+            files={"file": ("test.txt", b"test content", "text/plain")},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+
+def test_upload_rejects_files_larger_than_10_mb():
+    with TestClient(app) as client:
+        username = f"largeupload{uuid.uuid4().hex[:8]}"
+        register_and_login(client, username, "TestPassword123!")
+
+        csrf = token(client, "/upload")
+        oversized_content = b"x" * (10 * 1024 * 1024 + 1)
+
+        response = client.post(
+            "/upload",
+            data={"csrf": csrf},
+            files={
+                "file": (
+                    "large.txt",
+                    oversized_content,
+                    "text/plain",
+                )
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 200
+    assert "no larger than 10 MB" in response.text
